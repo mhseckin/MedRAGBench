@@ -1,0 +1,23 @@
+# MedRAGBench dependencies
+#
+# Tkinter is part of the Python standard library on most platforms. On some
+# Linux distributions you must install it separately (see README).
+
+# LLM + embeddings
+openai>=1.40.0
+
+# Uncomment to enable the "Switching to Claude" path:
+# anthropic>=0.39.0
+
+# Vector index (dense retrieval)
+chromadb>=0.5.0
+
+# Sparse keyword retrieval
+rank-bm25>=0.2.2
+
+# Cross-encoder reranking
+sentence-transformers>=3.0.0
+
+# PDF text extraction
+pdfplumber>=0.11.0
+PyPDF2>=3.0.0
