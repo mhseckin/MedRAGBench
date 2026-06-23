@@ -7,6 +7,10 @@ Usage:
     python run.py
 """
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from medragbench.app import main
 
 if __name__ == "__main__":
