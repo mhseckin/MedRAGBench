@@ -6,6 +6,14 @@
 # LLM + embeddings
 openai>=1.40.0
 
+# .env loading (medragbench/.env)
+python-dotenv>=1.0.0
+
+# HTTP API (web frontend backend — see medragbench/api.py)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9          # required by FastAPI for file uploads
+
 # Uncomment to enable the "Switching to Claude" path:
 # anthropic>=0.39.0
 
