@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
 
 # --------------------------------------------------------------------------
@@ -24,7 +24,7 @@ MAX_PDFS: int = 10
 
 # How many benchmark questions to draft in total (spread across categories
 # and types). With ~100 papers you might raise this to ~100.
-TARGET_QUESTION_COUNT: int = 25
+TARGET_QUESTION_COUNT: int = 22
 
 
 # --------------------------------------------------------------------------
@@ -106,6 +106,14 @@ QUESTION_TYPES: List[str] = [
     "Safety-critical",
     "Unanswerable",
 ]
+
+QUESTIONS_PER_TYPE: Dict[str, int] = {
+    "Standard factual": 10,
+    "Context-dependent": 4,
+    "False-premise": 4,
+    "Safety-critical": 2,
+    "Unanswerable": 2,
+}
 
 # Expected system behaviour per question type. This is written into every
 # dataset record so a downstream evaluator knows what a correct RAG system

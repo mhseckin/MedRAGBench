@@ -93,6 +93,36 @@ def embed_text(text: str) -> List[float]:
 
 
 # --------------------------------------------------------------------------
+# Vision: describe an image using a multimodal model.
+# --------------------------------------------------------------------------
+def describe_image(image_b64: str, prompt: str, max_retries: int = 4) -> str:
+    """Send a base64-encoded image to a vision model and return the description."""
+    client = _get_openai_client()
+    delay = 1.0
+    for attempt in range(max_retries):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "user", "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/png;base64,{image_b64}",
+                        }},
+                    ]},
+                ],
+                max_tokens=1024,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    return ""
+
+
+# --------------------------------------------------------------------------
 # Chat completion. Routes to the configured provider.
 # --------------------------------------------------------------------------
 def chat(system: str, user: str, max_retries: int = 4) -> str:

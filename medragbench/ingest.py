@@ -52,8 +52,58 @@ class Corpus:
 # --------------------------------------------------------------------------
 # PDF text extraction
 # --------------------------------------------------------------------------
-def _extract_pdf_text(path: str) -> str:
-    """Extract text from a PDF, preferring pdfplumber, falling back to PyPDF2."""
+def _table_to_markdown(table: List[List]) -> str:
+    """Convert a pdfplumber table (list of rows) into a markdown table string."""
+    if not table or len(table) < 2:
+        return ""
+    clean = []
+    for row in table:
+        clean.append([str(cell).strip() if cell else "" for cell in row])
+    header = "| " + " | ".join(clean[0]) + " |"
+    sep = "| " + " | ".join("---" for _ in clean[0]) + " |"
+    body = "\n".join("| " + " | ".join(row) + " |" for row in clean[1:])
+    return f"{header}\n{sep}\n{body}"
+
+
+def _extract_figures(path: str, progress=None) -> List[str]:
+    """Extract images from PDF pages and describe them with a vision model."""
+    import base64
+    descriptions = []
+    try:
+        import pdfplumber
+
+        with pdfplumber.open(path) as pdf:
+            for page_num, page in enumerate(pdf.pages, start=1):
+                images = page.images
+                if not images:
+                    continue
+                page_img = page.to_image(resolution=200)
+                import io
+                buf = io.BytesIO()
+                page_img.original.save(buf, format="PNG")
+                img_b64 = base64.b64encode(buf.getvalue()).decode()
+
+                prompt = (
+                    "You are a medical research assistant. Describe this figure "
+                    "from a medical paper in detail. Include all data points, "
+                    "labels, axes, legends, and any conclusions that can be drawn. "
+                    "If it contains a chart or graph, describe the trends and "
+                    "key values. Be thorough and specific."
+                )
+                if progress:
+                    progress(f"  Describing figure on page {page_num}...")
+                desc = llm.describe_image(img_b64, prompt)
+                if desc:
+                    descriptions.append(
+                        f"[Figure from page {page_num}] {desc}"
+                    )
+    except Exception:
+        pass
+    return descriptions
+
+
+def _extract_pdf_text(path: str, progress=None) -> str:
+    """Extract text, tables, and figures from a PDF."""
     text_parts: List[str] = []
     try:
         import pdfplumber
@@ -63,6 +113,12 @@ def _extract_pdf_text(path: str) -> str:
                 t = page.extract_text() or ""
                 if t:
                     text_parts.append(t)
+
+                tables = page.extract_tables() or []
+                for table in tables:
+                    md = _table_to_markdown(table)
+                    if md:
+                        text_parts.append(md)
     except Exception:
         text_parts = []
 
@@ -77,6 +133,9 @@ def _extract_pdf_text(path: str) -> str:
                     text_parts.append(t)
         except Exception:
             text_parts = []
+
+    figure_descs = _extract_figures(path, progress=progress)
+    text_parts.extend(figure_descs)
 
     return "\n".join(text_parts)
 
@@ -155,7 +214,7 @@ def build_corpus(
     # ---- Extract + chunk --------------------------------------------------
     for path in pdf_paths:
         log(f"Extracting: {os.path.basename(path)}")
-        raw = _extract_pdf_text(path)
+        raw = _extract_pdf_text(path, progress=log)
         cleaned = _clean_text(raw)
         if not cleaned:
             log(f"  (no extractable text, skipping {os.path.basename(path)})")

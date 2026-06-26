@@ -127,9 +127,8 @@ _DIFFICULTY_HINT = (
 )
 
 
-def _sample_context(corpus: Corpus, category: str, max_chunks: int = 6) -> str:
-    """Provide a few corpus excerpts to ground question drafting for a category."""
-    # Simple, deterministic sampling spread across papers for breadth.
+def _sample_context(corpus: Corpus, max_chunks: int = 10) -> str:
+    """Provide corpus excerpts spread across all papers for breadth."""
     by_paper: Dict[str, List] = {}
     for c in corpus.chunks:
         by_paper.setdefault(c.paper_id, []).append(c)
@@ -149,55 +148,118 @@ def _sample_context(corpus: Corpus, category: str, max_chunks: int = 6) -> str:
     return "\n\n".join(excerpts)
 
 
-def generate_questions(
-    corpus: Corpus,
-    total: int = config.TARGET_QUESTION_COUNT,
-    progress=None,
-) -> List[BenchmarkItem]:
-    """Stage 2: draft questions spread across categories and types."""
+_CLASSIFY_SYSTEM = (
+    "You are a medical literature classifier. Given excerpts from a research "
+    "paper, determine which single category the paper best belongs to. "
+    "Respond with strict JSON only, no prose."
+)
+
+
+def classify_papers(corpus: Corpus, progress=None) -> Dict[str, List[str]]:
+    """Classify each paper in the corpus into a category. Returns {category: [paper_titles]}."""
 
     def log(m):
         if progress:
             progress(m)
 
-    categories = config.PKD_CATEGORIES
-    types = config.QUESTION_TYPES
+    categories_list = ", ".join(config.PKD_CATEGORIES)
+    by_paper: Dict[str, List] = {}
+    for c in corpus.chunks:
+        by_paper.setdefault(c.paper_id, []).append(c)
 
-    # Distribute the target count roughly evenly across category x type cells,
-    # at least 1 per cell until the budget runs out.
-    cells = [(cat, typ) for cat in categories for typ in types]
-    per_cell = max(1, total // len(cells))
+    paper_categories: Dict[str, str] = {}
+    for paper_id, chunks in by_paper.items():
+        title = chunks[0].paper_title
+        excerpts = "\n\n".join(f"{c.text[:400]}" for c in chunks[:6])
+        user = (
+            f"Based on the following excerpts from a medical paper titled "
+            f'"{title}", classify it into exactly ONE of these categories:\n'
+            f"{categories_list}\n\n"
+            f"Excerpts:\n{excerpts}\n\n"
+            f'Respond with JSON: {{"category": "<chosen category>"}}. JSON only.'
+        )
+        log(f"Classifying: {title}...")
+        raw = llm.chat(_CLASSIFY_SYSTEM, user)
+        parsed = _parse_json(raw)
+        cat = None
+        if isinstance(parsed, dict) and parsed.get("category") in config.PKD_CATEGORIES:
+            cat = parsed["category"]
+        else:
+            for c in config.PKD_CATEGORIES:
+                if c.lower() in raw.lower():
+                    cat = c
+                    break
+        if not cat:
+            cat = config.PKD_CATEGORIES[0]
+        paper_categories[paper_id] = cat
+        log(f"  → {cat}")
+
+    category_breakdown: Dict[str, List[str]] = {}
+    for paper_id, cat in paper_categories.items():
+        title = corpus.papers.get(paper_id, paper_id)
+        category_breakdown.setdefault(cat, []).append(title)
+
+    log("--- Category breakdown ---")
+    for cat in config.PKD_CATEGORIES:
+        papers = category_breakdown.get(cat, [])
+        if papers:
+            log(f"  {cat}: {len(papers)} paper(s)")
+            for t in papers:
+                log(f"    • {t}")
+
+    return category_breakdown
+
+
+def generate_questions(
+    corpus: Corpus,
+    category_breakdown: Dict[str, List[str]],
+    progress=None,
+) -> List[BenchmarkItem]:
+    """Generate general patient questions using the fixed per-type distribution,
+    drawing context from ALL papers in the corpus."""
+
+    def log(m):
+        if progress:
+            progress(m)
+
+    active_categories = [cat for cat in config.PKD_CATEGORIES if cat in category_breakdown]
+    categories_summary = ", ".join(
+        f"{cat} ({len(category_breakdown[cat])} papers)" for cat in active_categories
+    )
 
     items: List[BenchmarkItem] = []
-    for (cat, typ) in cells:
-        if len(items) >= total:
-            break
-        n = min(per_cell, total - len(items))
-        context = _sample_context(corpus, cat)
+    for typ in config.QUESTION_TYPES:
+        n = config.QUESTIONS_PER_TYPE.get(typ, 2)
+        context = _sample_context(corpus, max_chunks=12)
         user = (
-            f"PKD category: {cat}\n"
+            f"The corpus covers these categories: {categories_summary}.\n"
             f"Question type: {typ}\n"
             f"Instruction: {_TYPE_INSTRUCTIONS[typ]}\n"
             f"{_DIFFICULTY_HINT}\n\n"
+            f"Write questions as a GENERAL PATIENT would ask them — natural, "
+            f"conversational language, not academic phrasing. The questions may "
+            f"draw on information from one or multiple papers.\n\n"
             f"Source excerpts from the uploaded corpus:\n{context}\n\n"
             f"Generate {n} question(s). Respond with a JSON array; each element "
-            f'is an object with keys "question" (string) and "difficulty" '
+            f'is an object with keys "question" (string), "category" (one of: '
+            f'{", ".join(config.PKD_CATEGORIES)}), and "difficulty" '
             f'(one of easy/moderate/hard). JSON only.'
         )
-        log(f"Drafting {n} '{typ}' question(s) for '{cat}'...")
+        log(f"Drafting {n} '{typ}' question(s)...")
         raw = llm.chat(_QGEN_SYSTEM, user)
         parsed = _parse_json(raw)
         if not isinstance(parsed, list):
-            log(f"  (could not parse questions for {cat}/{typ}, skipping)")
+            log(f"  (could not parse questions for {typ}, skipping)")
             continue
         for obj in parsed:
-            if len(items) >= total:
-                break
             if not isinstance(obj, dict):
                 continue
             q = str(obj.get("question", "")).strip()
             if not q:
                 continue
+            cat = str(obj.get("category", "")).strip()
+            if cat not in config.PKD_CATEGORIES:
+                cat = active_categories[0] if active_categories else config.PKD_CATEGORIES[0]
             diff = str(obj.get("difficulty", "moderate")).strip().lower()
             if diff not in ("easy", "moderate", "hard"):
                 diff = "moderate"
@@ -210,7 +272,9 @@ def generate_questions(
                     expected_behavior=config.EXPECTED_BEHAVIOR_BY_TYPE[typ],
                 )
             )
-    log(f"Drafted {len(items)} questions.")
+        log(f"  → {len([it for it in items if it.type == typ])} generated")
+
+    log(f"Drafted {len(items)} questions total.")
     return items
 
 

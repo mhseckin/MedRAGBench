@@ -25,14 +25,17 @@ export default function UploadView({ config, onRun, onToast }) {
     setFiles(next);
   };
 
+  const totalQuestions = config.questions_per_type
+    ? Object.values(config.questions_per_type).reduce((a, b) => a + b, 0)
+    : 0;
+
   return (
     <section className="card upload-card">
-      <h2>1 · Upload PKD papers</h2>
+      <h2>1 · Upload PKD Papers</h2>
       <p className="muted">
-        Select up to <b>{config.max_pdfs}</b> PDF papers. The pipeline will chunk
-        and index them, draft questions across <b>{config.categories.length}</b>{" "}
-        categories and <b>{config.question_types.length}</b> question types, find
-        supporting evidence, and assemble cited gold answers for you to review.
+        Select up to <b>{config.max_pdfs}</b> PDF papers. Each paper will be
+        classified into a category, then <b>{totalQuestions}</b> general patient
+        questions will be generated, with evidence retrieved across all papers.
       </p>
 
       <label
@@ -65,7 +68,7 @@ export default function UploadView({ config, onRun, onToast }) {
 
       <div className="taxonomy">
         <div>
-          <h3>Categories</h3>
+          <h3>Paper Categories</h3>
           <ul>
             {config.categories.map((c) => (
               <li key={c}>{c}</li>
@@ -73,11 +76,14 @@ export default function UploadView({ config, onRun, onToast }) {
           </ul>
         </div>
         <div>
-          <h3>Question types</h3>
+          <h3>Question Distribution</h3>
           <ul>
             {config.question_types.map((t) => (
               <li key={t}>
-                {t} <span className="muted">→ {config.expected_behavior_by_type[t]}</span>
+                {t}{" "}
+                <span className="muted">
+                  — {config.questions_per_type?.[t] || 0} questions
+                </span>
               </li>
             ))}
           </ul>
@@ -89,7 +95,7 @@ export default function UploadView({ config, onRun, onToast }) {
         disabled={files.length === 0}
         onClick={() => onRun(files)}
       >
-        Run pipeline (Stages 0–5)
+        Run Pipeline
       </button>
     </section>
   );
