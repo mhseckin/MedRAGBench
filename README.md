@@ -110,18 +110,18 @@ answer the question — this is what your evaluation scores against.
 
 ---
 
-## 5. Scaling from 10 to 100 PDFs
+## 5. Scaling from 100 to 400+ PDFs
 
 Open `medragbench/config.py` and change **one line**:
 
 ```python
-MAX_PDFS: int = 10      # change to 100
+MAX_PDFS: int = 100      # change to 400+
 ```
 
 You will probably also want to raise the number of questions drafted:
 
 ```python
-TARGET_QUESTION_COUNT: int = 25   # raise toward ~100 for a larger corpus
+TARGET_QUESTION_COUNT: int = 100   # raise toward ~1000 for a larger corpus
 ```
 
 Nothing else needs to change. Embedding and indexing already run in batches.
