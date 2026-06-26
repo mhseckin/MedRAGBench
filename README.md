@@ -1,6 +1,6 @@
 # MedRAGBench
 
-A desktop application that **creates a medical RAG benchmark dataset** from a
+A desktop/web application that **creates a medical RAG benchmark dataset** from a
 set of uploaded PDF papers. MedRAGBench does not answer patient questions
 itself — it produces a dataset of questions, clinician-approved gold answers,
 and retrieval targets that you then use to **evaluate** retrieval-augmented
@@ -10,7 +10,7 @@ It implements the Stage 0–7 pipeline:
 
 | Stage | What it does |
 |------:|--------------|
-| 0 | Upload up to 10 PDFs (configurable). |
+| 0 | Upload up to 100 PDFs (configurable). |
 | 1 | Extract text, chunk, build a **dense index (ChromaDB)** and a **BM25 keyword index**. |
 | 2 | Generate questions across 5 PKD categories and 5 question types. |
 | 3 | For each answerable question, find evidence by **hybrid search → Reciprocal Rank Fusion → cross-encoder rerank**, with a **sufficiency threshold** that flags unanswerable items. |
@@ -128,11 +128,11 @@ Nothing else needs to change. Embedding and indexing already run in batches.
 
 ---
 
-## 6. Switching to Claude
+## 6. Switching to an other LLM
 
 MedRAGBench routes **all chat generation** (question drafting, gold-answer
 assembly, and the no-retrieval recall check) through a single function,
-`llm.chat(system, user)`. Switching the generator to Anthropic Claude is
+`llm.chat(system, user)`. Switching the generator to different LLM, for example Anthropic Claude, is
 therefore a small, localized change. Embeddings stay on OpenAI, because
 Anthropic does not provide an embeddings endpoint.
 
