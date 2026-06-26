@@ -33,16 +33,16 @@ def run_generation(
         if progress:
             progress(m)
 
-    # Stage 0-1
-    log("=== Stage 0-1: Ingest & index corpus ===")
+    log("=== Ingesting & indexing corpus ===")
     corpus = ingest.build_corpus(pdf_paths, progress=log)
 
-    # Stage 2
-    log("=== Stage 2: Generate questions ===")
-    items = generate.generate_questions(corpus, progress=log)
+    log("=== Classifying papers ===")
+    category_breakdown = generate.classify_papers(corpus, progress=log)
 
-    # Stage 3-4
-    log("=== Stage 3-4: Find evidence & assemble gold answers ===")
+    log("=== Generating questions ===")
+    items = generate.generate_questions(corpus, category_breakdown, progress=log)
+
+    log("=== Finding evidence & assembling gold answers ===")
     for i, item in enumerate(items):
         log(f"  ({i + 1}/{len(items)}) {item.type} / {item.category}")
         if item.type in config.ANSWERABLE_TYPES:
@@ -50,23 +50,19 @@ def run_generation(
             if sufficient:
                 generate.assemble_gold_answer(item, passages)
             else:
-                # Corpus lacks evidence -> downgrade to unanswerable.
                 item.flags.append("auto_unanswerable_low_evidence")
                 item.type = "Unanswerable"
                 generate.mark_unanswerable(item)
         else:
-            # Unanswerable by design: confirm absence of evidence via scores.
             passages, sufficient = search.find_evidence(corpus, item.question)
             if sufficient:
-                # Evidence unexpectedly exists; flag for clinician attention.
                 item.flags.append("expected_unanswerable_but_evidence_found")
             generate.mark_unanswerable(item)
 
-    # Stage 5
-    log("=== Stage 5: Automated quality filter ===")
+    log("=== Running quality checks ===")
     kept, _dropped = quality.quality_filter(items, progress=log)
 
-    log(f"=== Generation complete: {len(kept)} items for review ===")
+    log(f"=== Complete: {len(kept)} items ready for review ===")
     return kept
 
 

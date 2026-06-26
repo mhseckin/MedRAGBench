@@ -19,6 +19,9 @@ with a database or object store (see the `JobStore` comment below).
 
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import json
 import os
@@ -179,9 +182,9 @@ def get_config() -> dict:
     return {
         "max_pdfs": config.MAX_PDFS,
         "target_question_count": config.TARGET_QUESTION_COUNT,
-        "provider": config.LLM_PROVIDER,
         "categories": config.PKD_CATEGORIES,
         "question_types": config.QUESTION_TYPES,
+        "questions_per_type": config.QUESTIONS_PER_TYPE,
         "expected_behavior_by_type": config.EXPECTED_BEHAVIOR_BY_TYPE,
     }
 

@@ -173,13 +173,12 @@ export default function App() {
           </div>
         </div>
         <div className="topbar-right">
-          {config && <span className="chip">Provider: {config.provider}</span>}
           {view === "review" && (
             <div className="review-summary">
               <span className="approved-count">{approvedCount}</span> approved of{" "}
               {items.length}
               <button className="btn btn-primary" onClick={exportJson}>
-                Export JSON ↓
+                Export Results ↓
               </button>
               <button className="btn btn-ghost" onClick={() => window.location.reload()}>
                 New run
