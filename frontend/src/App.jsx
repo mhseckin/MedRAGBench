@@ -30,6 +30,38 @@ export default function App() {
       .catch((e) => showToast("Cannot reach backend: " + e.message, true));
   }, [showToast]);
 
+  // ---- Load saved results ------------------------------------------------
+  const loadSavedResults = useCallback(async () => {
+    try {
+      const data = await api("/api/saved-results");
+      if (data.has_results && data.items.length > 0) {
+        setItems(data.items.map((it) => ({ ...it, decision: it.approved ? "approved" : null })));
+        setIndex(0);
+        setView("review");
+        showToast(`Loaded ${data.items.length} saved items.`);
+      } else {
+        showToast("No saved results found.", true);
+      }
+    } catch (e) {
+      showToast("Failed to load saved results: " + e.message, true);
+    }
+  }, [showToast]);
+
+  // ---- Run from cached corpus --------------------------------------------
+  const runFromCorpus = useCallback(async () => {
+    setLogLines([]);
+    setRunStatus("Starting from cached corpus…");
+    setView("running");
+    try {
+      const { job_id } = await api("/api/jobs/from-corpus", { method: "POST" });
+      setJobId(job_id);
+      setRunStatus("Running pipeline…");
+    } catch (e) {
+      showToast("Failed: " + e.message, true);
+      setView("upload");
+    }
+  }, [showToast]);
+
   // ---- Stages 0-5: launch generation -------------------------------------
   const startJob = useCallback(
     async (files) => {
@@ -190,7 +222,7 @@ export default function App() {
 
       <main>
         {view === "upload" && (
-          <UploadView config={config} onRun={startJob} onToast={showToast} />
+          <UploadView config={config} onRun={startJob} onToast={showToast} onLoadSaved={loadSavedResults} onRunFromCorpus={runFromCorpus} />
         )}
         {view === "running" && (
           <RunningView logLines={logLines} status={runStatus} />

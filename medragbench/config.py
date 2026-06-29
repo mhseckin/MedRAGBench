@@ -20,11 +20,11 @@ from typing import Dict, List
 # Scaling
 # --------------------------------------------------------------------------
 # Support up to 10 PDFs for now. To scale to 100, change ONLY this number.
-MAX_PDFS: int = 10
+MAX_PDFS: int = 100
 
 # How many benchmark questions to draft in total (spread across categories
 # and types). With ~100 papers you might raise this to ~100.
-TARGET_QUESTION_COUNT: int = 22
+TARGET_QUESTION_COUNT: int = 90
 
 
 # --------------------------------------------------------------------------
@@ -108,11 +108,11 @@ QUESTION_TYPES: List[str] = [
 ]
 
 QUESTIONS_PER_TYPE: Dict[str, int] = {
-    "Standard factual": 10,
-    "Context-dependent": 4,
-    "False-premise": 4,
-    "Safety-critical": 2,
-    "Unanswerable": 2,
+    "Standard factual": 50,
+    "Context-dependent": 10,
+    "False-premise": 10,
+    "Safety-critical": 10,
+    "Unanswerable": 10,
 }
 
 # Expected system behaviour per question type. This is written into every

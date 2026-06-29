@@ -107,22 +107,61 @@ def _rerank(
 
 
 # --------------------------------------------------------------------------
+# Multi-query expansion
+# --------------------------------------------------------------------------
+_REWRITE_SYSTEM = (
+    "You are a search query rewriter. Given a patient question about PKD, "
+    "generate 3 alternative phrasings that would help find relevant passages "
+    "in medical papers. Use different vocabulary and angles. "
+    "Respond with a JSON array of 3 strings. JSON only, no prose."
+)
+
+
+def _generate_query_variants(question: str) -> List[str]:
+    """Generate reworded versions of the question for broader retrieval."""
+    import json as _json
+    raw = llm.chat(_REWRITE_SYSTEM, question)
+    try:
+        raw = raw.strip()
+        if raw.startswith("```"):
+            import re
+            raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw).strip()
+        variants = _json.loads(raw)
+        if isinstance(variants, list):
+            return [str(v).strip() for v in variants if str(v).strip()][:3]
+    except Exception:
+        pass
+    return []
+
+
+# --------------------------------------------------------------------------
 # Public entry point
 # --------------------------------------------------------------------------
 def find_evidence(
     corpus: Corpus, question: str
 ) -> Tuple[List[RetrievedPassage], bool]:
     """
-    Run the full hybrid search for one question.
+    Run multi-query hybrid search for one question.
+
+    Generates reworded variants of the question, runs hybrid search for each
+    variant across all papers, then merges and reranks the combined results.
 
     Returns (passages, sufficient) where `sufficient` is True iff the best
-    reranked passage scores at or above SUFFICIENCY_THRESHOLD. When False,
-    the corpus is judged to lack evidence and the caller should mark the
-    item unanswerable / abstain.
+    reranked passage scores at or above SUFFICIENCY_THRESHOLD.
     """
-    dense_ids = _dense_search(corpus, question, config.DENSE_TOP_K)
-    bm25_ids = _bm25_search(corpus, question, config.BM25_TOP_K)
-    fused_ids = _rrf([dense_ids, bm25_ids], config.RRF_K, config.RRF_TOP_K)
+    queries = [question] + _generate_query_variants(question)
+
+    all_candidate_ids: List[str] = []
+    ranked_lists: List[List[str]] = []
+
+    for q in queries:
+        dense_ids = _dense_search(corpus, q, config.DENSE_TOP_K)
+        bm25_ids = _bm25_search(corpus, q, config.BM25_TOP_K)
+        ranked_lists.append(dense_ids)
+        ranked_lists.append(bm25_ids)
+
+    fused_ids = _rrf(ranked_lists, config.RRF_K, config.RRF_TOP_K * 2)
     passages = _rerank(corpus, question, fused_ids, config.RERANK_TOP_K)
 
     sufficient = bool(passages) and (

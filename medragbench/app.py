@@ -56,6 +56,7 @@ class MedRAGBenchApp:
         self._configure_styles()
         self._build_ui()
         self._poll_queue()
+        self._load_saved_results()
 
     def _configure_styles(self) -> None:
         style = ttk.Style()
@@ -111,6 +112,10 @@ class MedRAGBenchApp:
             header, text="Run Pipeline", style="Accent.TButton",
             command=self._run_pipeline)
         self.run_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(header, text="Load Corpus", style="TButton",
+                    command=self._load_corpus_dir).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(header, text="Load Results", style="TButton",
+                    command=self._load_results_file).pack(side=tk.RIGHT, padx=(8, 0))
         self.pdf_label = ttk.Label(header, text="No PDFs selected",
                                     style="Header.TLabel",
                                     font=("Helvetica", 10))
@@ -191,6 +196,81 @@ class MedRAGBenchApp:
         ttk.Button(actions, text="Next", style="Nav.TButton",
                     command=self._next_item).pack(side=tk.LEFT, padx=6)
 
+    # --------------------------------------------------------- persistence
+    def _load_saved_results(self) -> None:
+        saved = pipeline.load_results()
+        if saved:
+            self.items = saved
+            self.review_index = 0
+            self._log(f"Loaded {len(saved)} saved items from previous session.")
+            self.status.config(text=f"Loaded {len(saved)} items. Review them.")
+            self._refresh_review()
+
+    def _auto_save(self) -> None:
+        if self.items:
+            pipeline.save_results(self.items)
+
+    def _load_results_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Load saved results JSON",
+            initialdir=config.PATHS.workdir,
+            filetypes=[("JSON files", "*.json")],
+        )
+        if not path:
+            return
+        try:
+            import json
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            from .generate import BenchmarkItem
+            records = data if isinstance(data, list) else data.get("records", [])
+            items = []
+            for r in records:
+                items.append(BenchmarkItem(
+                    question=r.get("question", ""),
+                    type=r.get("type", ""),
+                    category=r.get("category", ""),
+                    difficulty=r.get("difficulty", "moderate"),
+                    expected_behavior=r.get("expected_behavior", ""),
+                    gold_answer=r.get("gold_answer", ""),
+                    supporting_passages=r.get("supporting_passages", []),
+                    source_papers=r.get("source_papers", []),
+                    retrieval_targets=r.get("retrieval_targets", []),
+                    flags=r.get("flags", []),
+                    approved=r.get("approved", False),
+                ))
+            self.items = items
+            self.review_index = 0
+            self._log(f"Loaded {len(items)} items from {os.path.basename(path)}.")
+            self.status.config(text=f"Loaded {len(items)} items. Review them.")
+            self._refresh_review()
+        except Exception as e:
+            messagebox.showerror("Load error", str(e))
+
+    def _load_corpus_dir(self) -> None:
+        """Load a previously built vector database / corpus from a directory."""
+        directory = filedialog.askdirectory(
+            title="Select corpus directory (contains chroma/ and corpus_meta.json)",
+            initialdir=config.PATHS.workdir,
+        )
+        if not directory:
+            return
+        try:
+            from . import ingest
+            corpus = ingest.load_corpus_from_dir(directory)
+            if corpus is None:
+                messagebox.showwarning(
+                    "No corpus found",
+                    "Could not find a valid corpus in the selected directory. "
+                    "Make sure it contains corpus_meta.json and a chroma/ folder."
+                )
+                return
+            self._log(f"Loaded corpus: {len(corpus.papers)} papers, {len(corpus.chunks)} chunks.")
+            self.status.config(text=f"Corpus loaded ({len(corpus.papers)} papers). Choose 'Run Pipeline' to generate questions.")
+            self._loaded_corpus = corpus
+        except Exception as e:
+            messagebox.showerror("Load error", str(e))
+
     # -------------------------------------------------------------- actions
     def _choose_pdfs(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -210,8 +290,9 @@ class MedRAGBenchApp:
         self.pdf_label.config(text=f"{len(paths)} PDF(s) selected")
 
     def _run_pipeline(self) -> None:
-        if not self.pdf_paths:
-            messagebox.showinfo("No PDFs", "Choose at least one PDF first.")
+        corpus = getattr(self, "_loaded_corpus", None)
+        if not self.pdf_paths and corpus is None:
+            messagebox.showinfo("No PDFs", "Choose PDFs or load a corpus first.")
             return
         if self._worker and self._worker.is_alive():
             return
@@ -222,11 +303,12 @@ class MedRAGBenchApp:
         def work():
             try:
                 items = pipeline.run_generation(
-                    self.pdf_paths,
+                    self.pdf_paths if self.pdf_paths else [],
                     progress=lambda m: self._msg_queue.put(("log", m)),
+                    preloaded_corpus=corpus,
                 )
                 self._msg_queue.put(("done", items))
-            except Exception as exc:  # surface errors to the UI
+            except Exception as exc:
                 self._msg_queue.put(("error", str(exc)))
 
         self._worker = threading.Thread(target=work, daemon=True)
@@ -315,6 +397,7 @@ class MedRAGBenchApp:
             return
         item.question = self.q_edit.get("1.0", tk.END).strip()
         item.gold_answer = self.a_edit.get("1.0", tk.END).strip()
+        self._auto_save()
         self.status.config(text="Edits saved to current item.")
 
     def _approve(self) -> None:
@@ -323,6 +406,7 @@ class MedRAGBenchApp:
             return
         self._save_edits()
         item.approved = True
+        self._auto_save()
         self.status.config(text=f"Approved item {self.review_index + 1}.")
         self._next_item()
 
@@ -331,6 +415,7 @@ class MedRAGBenchApp:
         if item is None:
             return
         item.approved = False
+        self._auto_save()
         self.status.config(text=f"Rejected item {self.review_index + 1}.")
         self._next_item()
 
