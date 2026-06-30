@@ -192,6 +192,7 @@ main { padding: 24px; max-width: 1280px; margin: 0 auto; }
 .passage-head { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
 .passage-label { font-weight: 700; color: var(--accent-dark); }
 .passage-paper { color: var(--muted); font-size: 12px; flex: 1; }
+.passage-authors { font-style: italic; opacity: 0.8; }
 .passage-score { color: var(--muted); font-size: 12px; }
 .passage-text { color: #38444e; }
 .no-passages { color: var(--muted); font-style: italic; font-size: 13px; }

@@ -1,8 +1,14 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { api } from "../api.js";
 
 // Stage 0: pick up to MAX_PDFS PDFs and launch the pipeline.
-export default function UploadView({ config, onRun, onToast }) {
+export default function UploadView({ config, onRun, onToast, onLoadSaved, onRunFromCorpus }) {
   const [files, setFiles] = useState([]);
+  const [corpusStatus, setCorpusStatus] = useState(null);
+
+  useEffect(() => {
+    api("/api/corpus-status").then(setCorpusStatus).catch(() => {});
+  }, []);
   const [dragover, setDragover] = useState(false);
   const inputRef = useRef(null);
 
@@ -90,13 +96,39 @@ export default function UploadView({ config, onRun, onToast }) {
         </div>
       </div>
 
-      <button
-        className="btn btn-primary btn-lg"
-        disabled={files.length === 0}
-        onClick={() => onRun(files)}
-      >
-        Run Pipeline
-      </button>
+      {corpusStatus?.has_corpus && (
+        <div className="card" style={{ marginBottom: "12px", padding: "12px 16px", background: "#E8F5E9" }}>
+          <p style={{ margin: 0 }}>
+            <b>Cached corpus available:</b> {corpusStatus.paper_count} papers, {corpusStatus.chunk_count} chunks.
+            You can run the pipeline without re-uploading PDFs.
+          </p>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          className="btn btn-primary btn-lg"
+          disabled={files.length === 0}
+          onClick={() => onRun(files)}
+        >
+          Run Pipeline
+        </button>
+        {corpusStatus?.has_corpus && (
+          <button
+            className="btn btn-lg"
+            onClick={onRunFromCorpus}
+            style={{ background: "#2B7A78", color: "#fff" }}
+          >
+            Run from Cached Corpus
+          </button>
+        )}
+        <button
+          className="btn btn-lg"
+          onClick={onLoadSaved}
+        >
+          Load Saved Results
+        </button>
+      </div>
     </section>
   );
 }

@@ -90,34 +90,44 @@ _QGEN_SYSTEM = (
     "You are a nephrology research assistant helping build a benchmark to "
     "evaluate medical retrieval-augmented generation systems for Autosomal "
     "Dominant Polycystic Kidney Disease (ADPKD/PKD) patient education. You "
-    "write realistic patient-style questions. You respond with strict JSON "
-    "only, no prose, no markdown."
+    "write realistic patient-style questions. IMPORTANT: Write questions the "
+    "way a REAL PATIENT would ask them — general, natural, conversational. "
+    "NEVER reference specific paper titles, author names, study names, or "
+    "specific research findings. A patient would ask 'What can I do to slow "
+    "down cyst growth?' NOT 'What did the TEMPO trial find about tolvaptan?' "
+    "You respond with strict JSON only, no prose, no markdown."
 )
 
 _TYPE_INSTRUCTIONS = {
     "Standard factual": (
-        "Write factual questions answerable from a single clear fact in the "
-        "provided source excerpts."
+        "Write general patient questions about PKD facts (symptoms, causes, "
+        "treatments, lifestyle). The answer should exist in the source "
+        "excerpts but the question must NOT mention any specific paper, "
+        "study, or author. Think: what would a newly diagnosed patient ask?"
     ),
     "Context-dependent": (
-        "Write questions whose complete answer requires combining information "
-        "from MORE THAN ONE excerpt or paper (multi-source synthesis)."
+        "Write patient questions whose complete answer requires combining "
+        "information from multiple sources (e.g., comparing treatments, "
+        "understanding a condition AND its treatment together). The question "
+        "must be general — no paper titles or study references."
     ),
     "False-premise": (
-        "Write questions that embed a clinically INCORRECT assumption about "
-        "PKD, so that a good system must correct the premise rather than "
-        "answer as asked."
+        "Write patient questions that embed a clinically INCORRECT assumption "
+        "about PKD (e.g., 'Since PKD only affects the kidneys...' when it "
+        "actually affects the liver too). A good system must correct the "
+        "premise. Keep it natural — a real patient might believe this."
     ),
     "Safety-critical": (
-        "Write questions about medication, dosing, or contraindications where "
-        "a wrong answer could cause harm, so that a good system should answer "
-        "carefully and defer to a clinician."
+        "Write patient questions about medication, dosing, interactions, or "
+        "contraindications where a wrong answer could cause harm. A good "
+        "system should answer carefully and recommend consulting a doctor. "
+        "Example: 'Can I take ibuprofen for my kidney pain?'"
     ),
     "Unanswerable": (
         "Write plausible PKD patient questions that are NOT covered by the "
-        "provided source excerpts and likely not in the uploaded corpus "
-        "(e.g., very recent trials, individualized prognosis, topics outside "
-        "the documents). Do not invent answers."
+        "provided source excerpts (e.g., very recent trials, individualized "
+        "prognosis, topics not in the documents). A good system should say "
+        "it cannot answer rather than guess."
     ),
 }
 
@@ -127,7 +137,7 @@ _DIFFICULTY_HINT = (
 )
 
 
-def _sample_context(corpus: Corpus, max_chunks: int = 10) -> str:
+def _sample_context(corpus: Corpus, max_chunks: int = 20) -> str:
     """Provide corpus excerpts spread across all papers for breadth."""
     by_paper: Dict[str, List] = {}
     for c in corpus.chunks:
@@ -228,51 +238,71 @@ def generate_questions(
     )
 
     items: List[BenchmarkItem] = []
+    batch_size = 10
+
     for typ in config.QUESTION_TYPES:
         n = config.QUESTIONS_PER_TYPE.get(typ, 2)
-        context = _sample_context(corpus, max_chunks=12)
-        user = (
-            f"The corpus covers these categories: {categories_summary}.\n"
-            f"Question type: {typ}\n"
-            f"Instruction: {_TYPE_INSTRUCTIONS[typ]}\n"
-            f"{_DIFFICULTY_HINT}\n\n"
-            f"Write questions as a GENERAL PATIENT would ask them — natural, "
-            f"conversational language, not academic phrasing. The questions may "
-            f"draw on information from one or multiple papers.\n\n"
-            f"Source excerpts from the uploaded corpus:\n{context}\n\n"
-            f"Generate {n} question(s). Respond with a JSON array; each element "
-            f'is an object with keys "question" (string), "category" (one of: '
-            f'{", ".join(config.PKD_CATEGORIES)}), and "difficulty" '
-            f'(one of easy/moderate/hard). JSON only.'
-        )
-        log(f"Drafting {n} '{typ}' question(s)...")
-        raw = llm.chat(_QGEN_SYSTEM, user)
-        parsed = _parse_json(raw)
-        if not isinstance(parsed, list):
-            log(f"  (could not parse questions for {typ}, skipping)")
-            continue
-        for obj in parsed:
-            if not isinstance(obj, dict):
-                continue
-            q = str(obj.get("question", "")).strip()
-            if not q:
-                continue
-            cat = str(obj.get("category", "")).strip()
-            if cat not in config.PKD_CATEGORIES:
-                cat = active_categories[0] if active_categories else config.PKD_CATEGORIES[0]
-            diff = str(obj.get("difficulty", "moderate")).strip().lower()
-            if diff not in ("easy", "moderate", "hard"):
-                diff = "moderate"
-            items.append(
-                BenchmarkItem(
-                    question=q,
-                    type=typ,
-                    category=cat,
-                    difficulty=diff,
-                    expected_behavior=config.EXPECTED_BEHAVIOR_BY_TYPE[typ],
+        type_items: List[BenchmarkItem] = []
+        remaining = n
+
+        while remaining > 0:
+            batch_n = min(remaining, batch_size)
+            context = _sample_context(corpus, max_chunks=12)
+
+            existing_qs = [it.question for it in type_items]
+            avoid_block = ""
+            if existing_qs:
+                avoid_block = (
+                    "\n\nDo NOT repeat or rephrase any of these already-generated "
+                    "questions:\n" + "\n".join(f"- {q}" for q in existing_qs[-20:])
                 )
+
+            user = (
+                f"The corpus covers these categories: {categories_summary}.\n"
+                f"Question type: {typ}\n"
+                f"Instruction: {_TYPE_INSTRUCTIONS[typ]}\n"
+                f"{_DIFFICULTY_HINT}\n\n"
+                f"Write questions as a GENERAL PATIENT would ask them — natural, "
+                f"conversational language, not academic phrasing. The questions may "
+                f"draw on information from one or multiple papers.{avoid_block}\n\n"
+                f"Source excerpts from the uploaded corpus:\n{context}\n\n"
+                f"Generate {batch_n} question(s). Respond with a JSON array; each element "
+                f'is an object with keys "question" (string), "category" (one of: '
+                f'{", ".join(config.PKD_CATEGORIES)}), and "difficulty" '
+                f'(one of easy/moderate/hard). JSON only.'
             )
-        log(f"  → {len([it for it in items if it.type == typ])} generated")
+            log(f"Drafting {batch_n} '{typ}' question(s) (batch {len(type_items)+1}-{len(type_items)+batch_n} of {n})...")
+            raw = llm.chat(_QGEN_SYSTEM, user)
+            parsed = _parse_json(raw)
+            if not isinstance(parsed, list):
+                log(f"  (could not parse questions for {typ}, skipping batch)")
+                remaining -= batch_n
+                continue
+            for obj in parsed:
+                if not isinstance(obj, dict):
+                    continue
+                q = str(obj.get("question", "")).strip()
+                if not q:
+                    continue
+                cat = str(obj.get("category", "")).strip()
+                if cat not in config.PKD_CATEGORIES:
+                    cat = active_categories[0] if active_categories else config.PKD_CATEGORIES[0]
+                diff = str(obj.get("difficulty", "moderate")).strip().lower()
+                if diff not in ("easy", "moderate", "hard"):
+                    diff = "moderate"
+                type_items.append(
+                    BenchmarkItem(
+                        question=q,
+                        type=typ,
+                        category=cat,
+                        difficulty=diff,
+                        expected_behavior=config.EXPECTED_BEHAVIOR_BY_TYPE[typ],
+                    )
+                )
+            remaining -= batch_n
+
+        items.extend(type_items)
+        log(f"  → {len(type_items)} '{typ}' questions generated")
 
     log(f"Drafted {len(items)} questions total.")
     return items
@@ -340,26 +370,31 @@ def assemble_gold_answer(
     # Build supporting_passages, source_papers, retrieval_targets.
     supporting = []
     paper_ids = []
-    paper_titles = {}
+    paper_info = {}
     for label in used_labels:
         rp = label_to_chunk[label]
+        authors = getattr(rp.chunk, "paper_authors", "") or ""
         supporting.append(
             {
                 "label": label,
                 "chunk_id": rp.chunk.chunk_id,
                 "paper_id": rp.chunk.paper_id,
                 "paper_title": rp.chunk.paper_title,
+                "paper_authors": authors,
                 "text": rp.chunk.text,
                 "rerank_score": round(rp.rerank_score, 4),
             }
         )
         paper_ids.append(rp.chunk.paper_id)
-        paper_titles[rp.chunk.paper_id] = rp.chunk.paper_title
+        paper_info[rp.chunk.paper_id] = {
+            "title": rp.chunk.paper_title,
+            "authors": authors,
+        }
 
     item.supporting_passages = supporting
     item.source_papers = [
-        {"paper_id": pid, "paper_title": paper_titles[pid]}
-        for pid in dict.fromkeys(paper_ids)  # de-dup, keep order
+        {"paper_id": pid, "paper_title": paper_info[pid]["title"], "paper_authors": paper_info[pid]["authors"]}
+        for pid in dict.fromkeys(paper_ids)
     ]
     # Retrieval targets = the set of papers a correct RAG system must fetch.
     item.retrieval_targets = list(dict.fromkeys(paper_ids))

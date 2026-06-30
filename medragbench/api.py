@@ -48,7 +48,7 @@ try:
 except ImportError:
     pass
 
-from . import config, pipeline
+from . import config, ingest, pipeline
 from .generate import BenchmarkItem
 
 
@@ -174,6 +174,80 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/saved-results")
+def get_saved_results() -> dict:
+    """Load previously saved pipeline results if available."""
+    saved = pipeline.load_results()
+    if saved is None:
+        return {"has_results": False, "items": []}
+    return {
+        "has_results": True,
+        "items": [_to_model(i, it).model_dump() for i, it in enumerate(saved)],
+    }
+
+
+@app.get("/api/corpus-status")
+def get_corpus_status() -> dict:
+    """Check if a cached corpus exists that can be reused."""
+    meta_path = os.path.join(config.PATHS.workdir, "corpus_meta.json")
+    if not os.path.exists(meta_path):
+        return {"has_corpus": False}
+    try:
+        import json as _json
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = _json.load(f)
+        papers = meta.get("papers", {})
+        chunks = meta.get("chunks", [])
+        return {
+            "has_corpus": True,
+            "paper_count": len(papers),
+            "chunk_count": len(chunks),
+            "papers": list(papers.values()),
+        }
+    except Exception:
+        return {"has_corpus": False}
+
+
+@app.post("/api/jobs/from-corpus", response_model=JobCreated, status_code=202)
+async def create_job_from_corpus() -> JobCreated:
+    """Run pipeline using the cached corpus (no PDF upload needed)."""
+    corpus = ingest.load_corpus_from_dir(config.PATHS.workdir)
+    if corpus is None:
+        raise HTTPException(status_code=404, detail="No cached corpus found.")
+
+    job = Job(id=uuid.uuid4().hex)
+    job.workdir = config.PATHS.workdir
+
+    with _JOBS_LOCK:
+        _JOBS[job.id] = job
+
+    threading.Thread(
+        target=_run_job_with_corpus, args=(job, corpus), daemon=True
+    ).start()
+    return JobCreated(job_id=job.id, status=job.status)
+
+
+def _run_job_with_corpus(job: Job, corpus) -> None:
+    """Background worker using a pre-loaded corpus."""
+
+    def progress(msg: str) -> None:
+        with job.lock:
+            job.log.append(msg)
+
+    with job.lock:
+        job.status = JobStatus.running
+    try:
+        items = pipeline.run_generation([], progress=progress, preloaded_corpus=corpus)
+        with job.lock:
+            job.items = items
+            job.status = JobStatus.done
+    except Exception as exc:
+        progress(f"ERROR: {exc}")
+        with job.lock:
+            job.error = str(exc)
+            job.status = JobStatus.error
 
 
 @app.get("/api/config")
@@ -311,6 +385,7 @@ def edit_item(job_id: str, item_id: int, edit: ItemEdit) -> ItemModel:
             it.question = edit.question.strip()
         if edit.gold_answer is not None:
             it.gold_answer = edit.gold_answer.strip()
+        pipeline.save_results(job.items)
     return _to_model(item_id, it)
 
 
@@ -320,6 +395,7 @@ def approve_item(job_id: str, item_id: int) -> ItemModel:
     it = _get_item(job, item_id)
     with job.lock:
         it.approved = True
+        pipeline.save_results(job.items)
     return _to_model(item_id, it)
 
 
@@ -329,6 +405,7 @@ def reject_item(job_id: str, item_id: int) -> ItemModel:
     it = _get_item(job, item_id)
     with job.lock:
         it.approved = False
+        pipeline.save_results(job.items)
     return _to_model(item_id, it)
 
 

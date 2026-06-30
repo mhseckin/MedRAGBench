@@ -13,6 +13,8 @@ passed to the search module in Stage 3.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import uuid
@@ -31,13 +33,15 @@ class Chunk:
     paper_id: str
     paper_title: str
     text: str
-    order: int  # position of chunk within its paper
+    order: int
+    paper_authors: str = ""
 
 
 @dataclass
 class Corpus:
     chunks: List[Chunk] = field(default_factory=list)
     papers: Dict[str, str] = field(default_factory=dict)  # paper_id -> title
+    paper_authors: Dict[str, str] = field(default_factory=dict)  # paper_id -> authors
     _chroma_collection: object = None
     _bm25: object = None
     _bm25_tokens: List[List[str]] = field(default_factory=list)
@@ -161,6 +165,19 @@ def _derive_title(path: str, text: str) -> str:
     return base.replace("_", " ").strip()
 
 
+def _derive_authors(path: str) -> str:
+    """Best-effort author extraction from PDF metadata."""
+    try:
+        from PyPDF2 import PdfReader
+
+        meta = PdfReader(path).metadata
+        if meta and meta.author and meta.author.strip():
+            return meta.author.strip()
+    except Exception:
+        pass
+    return ""
+
+
 # --------------------------------------------------------------------------
 # Chunking
 # --------------------------------------------------------------------------
@@ -191,13 +208,163 @@ def tokenize(text: str) -> List[str]:
 
 
 # --------------------------------------------------------------------------
+# Persistence helpers
+# --------------------------------------------------------------------------
+_CORPUS_META_FILE = "corpus_meta.json"
+_CHROMA_COLLECTION_NAME = "medragbench_corpus"
+
+
+def _corpus_fingerprint(pdf_paths: List[str]) -> str:
+    """Stable hash of the set of PDF filenames + sizes to detect changes."""
+    parts = []
+    for p in sorted(pdf_paths):
+        try:
+            size = os.path.getsize(p)
+        except OSError:
+            size = 0
+        parts.append(f"{os.path.basename(p)}:{size}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _save_corpus_meta(corpus: Corpus, fingerprint: str) -> None:
+    """Persist chunk metadata + papers to disk so we can reload without re-ingesting."""
+    meta = {
+        "fingerprint": fingerprint,
+        "papers": corpus.papers,
+        "paper_authors": corpus.paper_authors,
+        "chunks": [
+            {
+                "chunk_id": c.chunk_id,
+                "paper_id": c.paper_id,
+                "paper_title": c.paper_title,
+                "paper_authors": c.paper_authors,
+                "text": c.text,
+                "order": c.order,
+            }
+            for c in corpus.chunks
+        ],
+    }
+    path = os.path.join(config.PATHS.workdir, _CORPUS_META_FILE)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+
+
+def _load_corpus_if_cached(
+    fingerprint: str, progress=None
+) -> Optional[Corpus]:
+    """Try to load a previously saved corpus. Returns None if cache miss."""
+    meta_path = os.path.join(config.PATHS.workdir, _CORPUS_META_FILE)
+    if not os.path.exists(meta_path):
+        return None
+
+    def log(m):
+        if progress:
+            progress(m)
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        return None
+
+    if meta.get("fingerprint") != fingerprint:
+        log("Corpus cache fingerprint mismatch, re-ingesting...")
+        return None
+
+    import chromadb
+    client = chromadb.PersistentClient(path=config.PATHS.chroma_dir)
+    try:
+        collection = client.get_collection(_CHROMA_COLLECTION_NAME)
+    except Exception:
+        return None
+
+    if collection.count() == 0:
+        return None
+
+    corpus = Corpus()
+    corpus.papers = meta["papers"]
+    corpus.paper_authors = meta.get("paper_authors", {})
+    for cd in meta["chunks"]:
+        corpus.chunks.append(
+            Chunk(
+                chunk_id=cd["chunk_id"],
+                paper_id=cd["paper_id"],
+                paper_title=cd["paper_title"],
+                text=cd["text"],
+                order=cd["order"],
+                paper_authors=cd.get("paper_authors", ""),
+            )
+        )
+    corpus._chroma_collection = collection
+
+    from rank_bm25 import BM25Okapi
+    corpus._bm25_tokens = [tokenize(c.text) for c in corpus.chunks]
+    corpus._bm25 = BM25Okapi(corpus._bm25_tokens)
+
+    log(
+        f"Loaded cached corpus: {len(corpus.papers)} papers, "
+        f"{len(corpus.chunks)} chunks."
+    )
+    return corpus
+
+
+def load_corpus_from_dir(directory: str) -> Optional[Corpus]:
+    """Load a corpus from a given directory containing corpus_meta.json and chroma/."""
+    meta_path = os.path.join(directory, _CORPUS_META_FILE)
+    chroma_path = os.path.join(directory, "chroma")
+
+    if not os.path.exists(meta_path):
+        return None
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception:
+        return None
+
+    import chromadb
+    if not os.path.isdir(chroma_path):
+        chroma_path = config.PATHS.chroma_dir
+    client = chromadb.PersistentClient(path=chroma_path)
+    try:
+        collection = client.get_collection(_CHROMA_COLLECTION_NAME)
+    except Exception:
+        return None
+
+    if collection.count() == 0:
+        return None
+
+    corpus = Corpus()
+    corpus.papers = meta.get("papers", {})
+    corpus.paper_authors = meta.get("paper_authors", {})
+    for cd in meta.get("chunks", []):
+        corpus.chunks.append(
+            Chunk(
+                chunk_id=cd["chunk_id"],
+                paper_id=cd["paper_id"],
+                paper_title=cd["paper_title"],
+                text=cd["text"],
+                order=cd["order"],
+                paper_authors=cd.get("paper_authors", ""),
+            )
+        )
+    corpus._chroma_collection = collection
+
+    from rank_bm25 import BM25Okapi
+    corpus._bm25_tokens = [tokenize(c.text) for c in corpus.chunks]
+    corpus._bm25 = BM25Okapi(corpus._bm25_tokens)
+
+    return corpus
+
+
+# --------------------------------------------------------------------------
 # Build the corpus
 # --------------------------------------------------------------------------
 def build_corpus(
     pdf_paths: List[str],
     progress: Optional[Callable[[str], None]] = None,
 ) -> Corpus:
-    """Run Stage 0-1: extract, chunk, and index the uploaded PDFs."""
+    """Extract, chunk, and index PDFs. Reuses cached corpus if PDFs haven't changed."""
 
     def log(msg: str) -> None:
         if progress:
@@ -208,6 +375,11 @@ def build_corpus(
             f"{len(pdf_paths)} PDFs provided but MAX_PDFS={config.MAX_PDFS}. "
             "Raise MAX_PDFS in config.py to scale up."
         )
+
+    fingerprint = _corpus_fingerprint(pdf_paths)
+    cached = _load_corpus_if_cached(fingerprint, progress=log)
+    if cached is not None:
+        return cached
 
     corpus = Corpus()
 
@@ -221,7 +393,9 @@ def build_corpus(
             continue
         paper_id = uuid.uuid4().hex[:8]
         title = _derive_title(path, cleaned)
+        authors = _derive_authors(path)
         corpus.papers[paper_id] = title
+        corpus.paper_authors[paper_id] = authors
 
         pieces = _chunk_words(
             cleaned, config.CHUNK_SIZE_WORDS, config.CHUNK_OVERLAP_WORDS
@@ -234,6 +408,7 @@ def build_corpus(
                     paper_title=title,
                     text=piece,
                     order=i,
+                    paper_authors=authors,
                 )
             )
         log(f"  -> {len(pieces)} chunks")
@@ -246,12 +421,14 @@ def build_corpus(
     import chromadb
 
     client = chromadb.PersistentClient(path=config.PATHS.chroma_dir)
-    collection_name = f"corpus_{uuid.uuid4().hex[:8]}"
+    try:
+        client.delete_collection(_CHROMA_COLLECTION_NAME)
+    except Exception:
+        pass
     collection = client.create_collection(
-        name=collection_name, metadata={"hnsw:space": "cosine"}
+        name=_CHROMA_COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
     )
 
-    # Embed in batches to respect API limits.
     batch = 64
     for start in range(0, len(corpus.chunks), batch):
         sub = corpus.chunks[start : start + batch]
@@ -275,6 +452,9 @@ def build_corpus(
 
     corpus._bm25_tokens = [tokenize(c.text) for c in corpus.chunks]
     corpus._bm25 = BM25Okapi(corpus._bm25_tokens)
+
+    # ---- Save to disk for next time --------------------------------------
+    _save_corpus_meta(corpus, fingerprint)
 
     log(
         f"Corpus ready: {len(corpus.papers)} papers, "

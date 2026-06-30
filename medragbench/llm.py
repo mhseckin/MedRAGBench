@@ -102,7 +102,7 @@ def describe_image(image_b64: str, prompt: str, max_retries: int = 4) -> str:
     for attempt in range(max_retries):
         try:
             resp = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "user", "content": [
                         {"type": "text", "text": prompt},
