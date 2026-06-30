@@ -33,13 +33,15 @@ class Chunk:
     paper_id: str
     paper_title: str
     text: str
-    order: int  # position of chunk within its paper
+    order: int
+    paper_authors: str = ""
 
 
 @dataclass
 class Corpus:
     chunks: List[Chunk] = field(default_factory=list)
     papers: Dict[str, str] = field(default_factory=dict)  # paper_id -> title
+    paper_authors: Dict[str, str] = field(default_factory=dict)  # paper_id -> authors
     _chroma_collection: object = None
     _bm25: object = None
     _bm25_tokens: List[List[str]] = field(default_factory=list)
@@ -163,6 +165,19 @@ def _derive_title(path: str, text: str) -> str:
     return base.replace("_", " ").strip()
 
 
+def _derive_authors(path: str) -> str:
+    """Best-effort author extraction from PDF metadata."""
+    try:
+        from PyPDF2 import PdfReader
+
+        meta = PdfReader(path).metadata
+        if meta and meta.author and meta.author.strip():
+            return meta.author.strip()
+    except Exception:
+        pass
+    return ""
+
+
 # --------------------------------------------------------------------------
 # Chunking
 # --------------------------------------------------------------------------
@@ -216,11 +231,13 @@ def _save_corpus_meta(corpus: Corpus, fingerprint: str) -> None:
     meta = {
         "fingerprint": fingerprint,
         "papers": corpus.papers,
+        "paper_authors": corpus.paper_authors,
         "chunks": [
             {
                 "chunk_id": c.chunk_id,
                 "paper_id": c.paper_id,
                 "paper_title": c.paper_title,
+                "paper_authors": c.paper_authors,
                 "text": c.text,
                 "order": c.order,
             }
@@ -266,6 +283,7 @@ def _load_corpus_if_cached(
 
     corpus = Corpus()
     corpus.papers = meta["papers"]
+    corpus.paper_authors = meta.get("paper_authors", {})
     for cd in meta["chunks"]:
         corpus.chunks.append(
             Chunk(
@@ -274,6 +292,7 @@ def _load_corpus_if_cached(
                 paper_title=cd["paper_title"],
                 text=cd["text"],
                 order=cd["order"],
+                paper_authors=cd.get("paper_authors", ""),
             )
         )
     corpus._chroma_collection = collection
@@ -317,6 +336,7 @@ def load_corpus_from_dir(directory: str) -> Optional[Corpus]:
 
     corpus = Corpus()
     corpus.papers = meta.get("papers", {})
+    corpus.paper_authors = meta.get("paper_authors", {})
     for cd in meta.get("chunks", []):
         corpus.chunks.append(
             Chunk(
@@ -325,6 +345,7 @@ def load_corpus_from_dir(directory: str) -> Optional[Corpus]:
                 paper_title=cd["paper_title"],
                 text=cd["text"],
                 order=cd["order"],
+                paper_authors=cd.get("paper_authors", ""),
             )
         )
     corpus._chroma_collection = collection
@@ -372,7 +393,9 @@ def build_corpus(
             continue
         paper_id = uuid.uuid4().hex[:8]
         title = _derive_title(path, cleaned)
+        authors = _derive_authors(path)
         corpus.papers[paper_id] = title
+        corpus.paper_authors[paper_id] = authors
 
         pieces = _chunk_words(
             cleaned, config.CHUNK_SIZE_WORDS, config.CHUNK_OVERLAP_WORDS
@@ -385,6 +408,7 @@ def build_corpus(
                     paper_title=title,
                     text=piece,
                     order=i,
+                    paper_authors=authors,
                 )
             )
         log(f"  -> {len(pieces)} chunks")

@@ -377,8 +377,10 @@ class MedRAGBenchApp:
         # Evidence display
         lines = []
         for sp in item.supporting_passages:
+            authors = sp.get('paper_authors', '')
+            author_str = f" — {authors}" if authors else ""
             lines.append(
-                f"[{sp['label']}] {sp['paper_title']} "
+                f"[{sp['label']}] {sp['paper_title']}{author_str} "
                 f"(score {sp.get('rerank_score', 'n/a')})\n{sp['text'][:400]}…\n"
             )
         if not lines:

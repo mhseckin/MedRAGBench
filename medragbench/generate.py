@@ -370,26 +370,31 @@ def assemble_gold_answer(
     # Build supporting_passages, source_papers, retrieval_targets.
     supporting = []
     paper_ids = []
-    paper_titles = {}
+    paper_info = {}
     for label in used_labels:
         rp = label_to_chunk[label]
+        authors = getattr(rp.chunk, "paper_authors", "") or ""
         supporting.append(
             {
                 "label": label,
                 "chunk_id": rp.chunk.chunk_id,
                 "paper_id": rp.chunk.paper_id,
                 "paper_title": rp.chunk.paper_title,
+                "paper_authors": authors,
                 "text": rp.chunk.text,
                 "rerank_score": round(rp.rerank_score, 4),
             }
         )
         paper_ids.append(rp.chunk.paper_id)
-        paper_titles[rp.chunk.paper_id] = rp.chunk.paper_title
+        paper_info[rp.chunk.paper_id] = {
+            "title": rp.chunk.paper_title,
+            "authors": authors,
+        }
 
     item.supporting_passages = supporting
     item.source_papers = [
-        {"paper_id": pid, "paper_title": paper_titles[pid]}
-        for pid in dict.fromkeys(paper_ids)  # de-dup, keep order
+        {"paper_id": pid, "paper_title": paper_info[pid]["title"], "paper_authors": paper_info[pid]["authors"]}
+        for pid in dict.fromkeys(paper_ids)
     ]
     # Retrieval targets = the set of papers a correct RAG system must fetch.
     item.retrieval_targets = list(dict.fromkeys(paper_ids))

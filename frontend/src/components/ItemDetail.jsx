@@ -64,7 +64,10 @@ export default function ItemDetail({
             <div className="passage" key={p.label + p.chunk_id}>
               <div className="passage-head">
                 <span className="passage-label">{p.label}</span>
-                <span className="passage-paper">{p.paper_title || p.paper_id}</span>
+                <span className="passage-paper">
+                  {p.paper_title || p.paper_id}
+                  {p.paper_authors && <span className="passage-authors"> — {p.paper_authors}</span>}
+                </span>
                 <span className="passage-score">score {fmtScore(p.rerank_score)}</span>
               </div>
               <div className="passage-text">{p.text}</div>
